@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Roadtrip Finistère</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚐</text></svg>">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="app">
+
+  <header id="topbar">
+    <button id="toggleSidebar" class="icon-btn" title="Afficher/masquer la liste">☰</button>
+    <h1>🚐 Roadtrip Finistère</h1>
+    <div id="stats"></div>
+  </header>
+
+  <div id="main">
+    <aside id="sidebar">
+      <div id="addBar">
+        <button id="addModeBtn" class="btn primary">+ Ajouter un point sur la carte</button>
+      </div>
+
+      <div id="filters">
+        <button class="filter-btn active" data-filter="all">Tout</button>
+        <button class="filter-btn" data-filter="activite">🏄 Activités</button>
+        <button class="filter-btn" data-filter="dodo">🚐 Dodo</button>
+      </div>
+
+      <div id="stopList"></div>
+
+      <div id="toolsBar">
+        <button id="routeToggle" class="btn">📍 Relier les étapes</button>
+        <button id="seedBtn" class="btn">Charger des exemples</button>
+        <button id="exportBtn" class="btn">⭳ Exporter</button>
+        <label class="btn" for="importInput">⭱ Importer</label>
+        <input type="file" id="importInput" accept="application/json" hidden>
+      </div>
+      <p class="hint">Les données sont sauvegardées uniquement dans ce navigateur (localStorage). Pensez à exporter régulièrement pour ne rien perdre ou pour les transférer sur un autre appareil.</p>
+    </aside>
+
+    <div id="map"></div>
+  </div>
+
+  <div id="formOverlay" class="hidden">
+    <form id="stopForm">
+      <h2 id="formTitle">Nouveau point</h2>
+
+      <label>Nom
+        <input type="text" id="f-name" required placeholder="Ex: Plage de la Torche">
+      </label>
+
+      <label>Catégorie
+        <select id="f-category">
+          <option value="activite">🏄 Activité</option>
+          <option value="dodo">🚐 Dodo (nuit)</option>
+        </select>
+      </label>
+
+      <label>Type
+        <select id="f-type"></select>
+      </label>
+
+      <label>Date
+        <input type="date" id="f-date">
+      </label>
+
+      <label>Note
+        <div id="f-rating" class="rating" data-value="0">
+          <span data-star="1">★</span><span data-star="2">★</span><span data-star="3">★</span><span data-star="4">★</span><span data-star="5">★</span>
+        </div>
+      </label>
+
+      <label>Notes / infos pratiques
+        <textarea id="f-notes" rows="3" placeholder="Accès, prix, marée, contact, état du spot..."></textarea>
+      </label>
+
+      <div class="coords" id="f-coords"></div>
+
+      <div class="form-actions">
+        <button type="button" id="cancelForm" class="btn">Annuler</button>
+        <button type="button" id="deleteStopBtn" class="btn danger hidden">Supprimer</button>
+        <button type="submit" class="btn primary">Enregistrer</button>
+      </div>
+    </form>
+  </div>
+
+</div>
+
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
