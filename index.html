@@ -20,7 +20,11 @@
   <div id="main">
     <aside id="sidebar">
       <div id="addBar">
-        <button id="addModeBtn" class="btn primary">+ Ajouter un point sur la carte</button>
+        <div id="searchWrap">
+          <input type="text" id="placeSearch" placeholder="🔍 Chercher une adresse ou un lieu (ex: Camping des Dunes, Crozon)" autocomplete="off">
+          <div id="searchResults" class="search-results hidden"></div>
+        </div>
+        <button id="addModeBtn" class="link-btn">📍 ou placer un point manuellement sur la carte</button>
       </div>
 
       <div id="filters">
@@ -36,13 +40,16 @@
         🧭 Afficher l'itinéraire et les trajets
       </label>
 
+      <div id="gmapsLinks" class="gmaps-links"></div>
+
       <div id="toolsBar">
         <button id="seedBtn" class="btn">Charger des exemples</button>
-        <button id="exportBtn" class="btn">⭳ Exporter</button>
+        <button id="exportBtn" class="btn">⭳ Exporter (JSON)</button>
+        <button id="exportGpxBtn" class="btn">⭳ Exporter (GPX)</button>
         <label class="btn" for="importInput">⭱ Importer</label>
         <input type="file" id="importInput" accept="application/json" hidden>
       </div>
-      <p class="hint">Les données sont sauvegardées uniquement dans ce navigateur (localStorage). Pensez à exporter régulièrement pour ne rien perdre ou pour les transférer sur un autre appareil. Les distances/durées de trajet sont calculées via le service public OSRM (estimation routière) ; à défaut de réponse, une estimation à vol d'oiseau est utilisée.</p>
+      <p class="hint">Les données sont sauvegardées uniquement dans ce navigateur (localStorage). Pensez à exporter régulièrement pour ne rien perdre ou pour les transférer sur un autre appareil. Les distances/durées de trajet sont calculées via le service public OSRM (estimation routière) ; à défaut de réponse, une estimation à vol d'oiseau est utilisée. La recherche d'adresse utilise Nominatim / OpenStreetMap.</p>
     </aside>
 
     <div id="map"></div>

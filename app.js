@@ -2,6 +2,8 @@
 
 const STORAGE_KEY = "finistere-roadtrip-stops";
 const AVG_SPEED_KMH = 50; // hypothèse pour l'estimation à vol d'oiseau si le calcul d'itinéraire échoue
+const FINISTERE_VIEWBOX = "-5.3,48.9,-3.3,47.7"; // left,top,right,bottom : biaise la recherche d'adresse vers le Finistère
+const GMAPS_MAX_STOPS_PER_LINK = 11; // origine + destination + 9 waypoints (limite de l'URL Google Maps)
 
 const TYPES = {
   activite: [
@@ -339,6 +341,23 @@ function stopCardHtml(s) {
       </div>`;
 }
 
+function googleMapsDirectionsUrl(stopsList) {
+  if (stopsList.length < 2) return "";
+  const origin = stopsList[0];
+  const destination = stopsList[stopsList.length - 1];
+  const waypoints = stopsList.slice(1, -1);
+  const params = new URLSearchParams({
+    api: "1",
+    origin: `${origin.lat},${origin.lng}`,
+    destination: `${destination.lat},${destination.lng}`,
+    travelmode: "driving",
+  });
+  if (waypoints.length) {
+    params.set("waypoints", waypoints.map((s) => `${s.lat},${s.lng}`).join("|"));
+  }
+  return `https://www.google.com/maps/dir/?${params.toString()}`;
+}
+
 function legRowHtml(a, b) {
   const leg = ensureLeg(a, b);
   let content;
@@ -348,7 +367,36 @@ function legRowHtml(a, b) {
     const estimateNote = leg.source === "estimate" ? ` <span class="leg-estimate">(estimation à vol d'oiseau)</span>` : "";
     content = `🚗 ${formatKm(leg.distanceKm)} km · ${formatDuration(leg.durationMin)}${estimateNote}`;
   }
-  return `<div class="leg-row">${content}</div>`;
+  const gmapsUrl = googleMapsDirectionsUrl([a, b]);
+  return `<div class="leg-row">${content} <a class="leg-gmaps" href="${gmapsUrl}" target="_blank" rel="noopener">Google Maps ↗</a></div>`;
+}
+
+function renderGmapsLinks() {
+  const container = document.getElementById("gmapsLinks");
+  const visible = getVisibleStops();
+  if (visible.length < 2) {
+    container.innerHTML = "";
+    return;
+  }
+
+  const chunks = [];
+  let i = 0;
+  while (i < visible.length - 1) {
+    const chunk = visible.slice(i, i + GMAPS_MAX_STOPS_PER_LINK);
+    chunks.push(chunk);
+    i += GMAPS_MAX_STOPS_PER_LINK - 1;
+  }
+
+  container.innerHTML = chunks
+    .map((chunk) => {
+      const url = googleMapsDirectionsUrl(chunk);
+      const label =
+        chunks.length > 1
+          ? `🗺️ Ouvrir étapes #${chunk[0].order} → #${chunk[chunk.length - 1].order} dans Google Maps ↗`
+          : `🗺️ Ouvrir l'itinéraire dans Google Maps ↗`;
+      return `<a class="gmaps-link-btn" href="${url}" target="_blank" rel="noopener">${label}</a>`;
+    })
+    .join("");
 }
 
 function renderList() {
@@ -356,7 +404,8 @@ function renderList() {
   const visible = getVisibleStops();
 
   if (visible.length === 0) {
-    container.innerHTML = `<p class="empty-msg">Aucun point pour l'instant.<br>Cliquez sur "+ Ajouter un point" puis sur la carte pour commencer.</p>`;
+    container.innerHTML = `<p class="empty-msg">Aucun point pour l'instant.<br>Cherchez une adresse ci-dessus ou placez un point sur la carte pour commencer.</p>`;
+    renderGmapsLinks();
     return;
   }
 
@@ -386,6 +435,8 @@ function renderList() {
       if (window.innerWidth <= 800) closeSidebarMobile();
     });
   });
+
+  renderGmapsLinks();
 }
 
 function renderStats() {
@@ -529,10 +580,94 @@ function setAddMode(value) {
   addMode = value;
   document.body.classList.toggle("add-mode", addMode);
   addModeBtn.classList.toggle("active", addMode);
-  addModeBtn.textContent = addMode ? "Cliquez sur la carte..." : "+ Ajouter un point sur la carte";
+  addModeBtn.textContent = addMode ? "Cliquez sur la carte…" : "📍 ou placer un point manuellement sur la carte";
 }
 
 addModeBtn.addEventListener("click", () => setAddMode(!addMode));
+
+// ---------- Recherche d'adresse / de lieu ----------
+
+const placeSearchInput = document.getElementById("placeSearch");
+const searchResultsEl = document.getElementById("searchResults");
+let searchDebounceTimer = null;
+let searchToken = 0;
+
+function hideSearchResults() {
+  searchResultsEl.classList.add("hidden");
+  searchResultsEl.innerHTML = "";
+}
+
+function shortenPlaceName(r) {
+  if (r.name) return r.name;
+  return r.display_name.split(",")[0];
+}
+
+function renderSearchResults(results) {
+  if (!results.length) {
+    searchResultsEl.innerHTML = `<div class="search-result-status">Aucun résultat.</div>`;
+    return;
+  }
+  searchResultsEl.innerHTML = results
+    .map((r, i) => `<div class="search-result-item" data-index="${i}">${escapeHtml(r.display_name)}</div>`)
+    .join("");
+  searchResultsEl.querySelectorAll(".search-result-item").forEach((el) => {
+    el.addEventListener("click", () => selectSearchResult(results[Number(el.dataset.index)]));
+  });
+}
+
+function selectSearchResult(r) {
+  const lat = Number(r.lat);
+  const lng = Number(r.lon);
+  hideSearchResults();
+  placeSearchInput.value = "";
+  if (addMode) setAddMode(false);
+  map.setView([lat, lng], 15, { animate: true });
+  openForm(null, { lat, lng });
+  fName.value = shortenPlaceName(r);
+}
+
+async function runPlaceSearch(query) {
+  const token = ++searchToken;
+  searchResultsEl.classList.remove("hidden");
+  searchResultsEl.innerHTML = `<div class="search-result-status">Recherche…</div>`;
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&viewbox=${FINISTERE_VIEWBOX}&q=${encodeURIComponent(query)}`;
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (token !== searchToken) return;
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const results = await res.json();
+    if (token !== searchToken) return;
+    renderSearchResults(results);
+  } catch (e) {
+    if (token !== searchToken) return;
+    searchResultsEl.innerHTML = `<div class="search-result-status">Recherche indisponible. Réessayez, ou placez un point sur la carte.</div>`;
+  }
+}
+
+placeSearchInput.addEventListener("input", () => {
+  const query = placeSearchInput.value.trim();
+  clearTimeout(searchDebounceTimer);
+  if (query.length < 3) {
+    hideSearchResults();
+    return;
+  }
+  searchDebounceTimer = setTimeout(() => runPlaceSearch(query), 400);
+});
+
+placeSearchInput.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    hideSearchResults();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    clearTimeout(searchDebounceTimer);
+    const query = placeSearchInput.value.trim();
+    if (query.length >= 3) runPlaceSearch(query);
+  }
+});
+
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#searchWrap")) hideSearchResults();
+});
 
 // ---------- Filters ----------
 
@@ -573,6 +708,71 @@ document.getElementById("exportBtn").addEventListener("click", () => {
   const a = document.createElement("a");
   a.href = url;
   a.download = `roadtrip-finistere-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+function escapeXml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function buildGpx() {
+  const ordered = sortedStops();
+
+  const wpts = ordered
+    .map((s) => {
+      const typeLabel = (TYPES[s.category].find((t) => t.value === s.type) || {}).label || s.type;
+      const desc = `${typeLabel}${s.notes ? " — " + s.notes : ""}`;
+      return `  <wpt lat="${s.lat}" lon="${s.lng}">
+    <name>${escapeXml(`#${s.order} ${s.name}`)}</name>
+    <desc>${escapeXml(desc)}</desc>
+  </wpt>`;
+    })
+    .join("\n");
+
+  const trkpts = [];
+  for (let i = 0; i < ordered.length - 1; i++) {
+    const a = ordered[i];
+    const b = ordered[i + 1];
+    const leg = legCache.get(legKey(a, b));
+    const coords =
+      leg && leg.status === "ready"
+        ? leg.coords
+        : [
+            [a.lat, a.lng],
+            [b.lat, b.lng],
+          ];
+    coords.forEach(([lat, lng]) => trkpts.push(`      <trkpt lat="${lat}" lon="${lng}"></trkpt>`));
+  }
+
+  const trk =
+    trkpts.length > 0
+      ? `  <trk>
+    <name>Itinéraire roadtrip Finistère</name>
+    <trkseg>
+${trkpts.join("\n")}
+    </trkseg>
+  </trk>\n`
+      : "";
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Roadtrip Finistère" xmlns="http://www.topografix.com/GPX/1/1">
+${wpts}
+${trk}</gpx>
+`;
+}
+
+document.getElementById("exportGpxBtn").addEventListener("click", () => {
+  const blob = new Blob([buildGpx()], { type: "application/gpx+xml" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `roadtrip-finistere-${new Date().toISOString().slice(0, 10)}.gpx`;
   a.click();
   URL.revokeObjectURL(url);
 });

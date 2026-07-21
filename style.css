@@ -63,6 +63,65 @@ html, body {
 
 #addBar { padding: 12px; border-bottom: 1px solid var(--border); }
 
+#searchWrap { position: relative; margin-bottom: 8px; }
+
+#placeSearch {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: inherit;
+  color: var(--text);
+}
+
+.search-results {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+  max-height: 240px;
+  overflow-y: auto;
+  z-index: 1200;
+}
+
+.search-results.hidden { display: none; }
+
+.search-result-item {
+  padding: 8px 10px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+
+.search-result-item:last-child { border-bottom: none; }
+.search-result-item:hover { background: var(--bg); }
+
+.search-result-status {
+  padding: 8px 10px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.link-btn {
+  display: block;
+  background: none;
+  border: none;
+  color: var(--muted);
+  text-decoration: underline;
+  font-size: 0.78rem;
+  cursor: pointer;
+  padding: 2px 0;
+  text-align: left;
+}
+
+.link-btn.active { color: var(--text); font-weight: 600; }
+
 #filters {
   display: flex;
   gap: 6px;
@@ -153,6 +212,40 @@ html, body {
 }
 
 .leg-loading, .leg-estimate { font-style: italic; }
+
+.leg-gmaps {
+  margin-left: 6px;
+  color: var(--activite);
+  text-decoration: none;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.leg-gmaps:hover { text-decoration: underline; }
+
+.gmaps-links {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gmaps-links:empty { display: none; border-top: none; padding: 0; }
+
+.gmaps-link-btn {
+  display: block;
+  text-align: center;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--activite);
+  color: var(--activite);
+  text-decoration: none;
+  font-size: 0.8rem;
+  background: #fff;
+}
+
+.gmaps-link-btn:hover { background: var(--activite); color: #fff; }
 
 .badge {
   display: inline-block;
