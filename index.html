@@ -31,14 +31,18 @@
 
       <div id="stopList"></div>
 
+      <label id="routeToggleWrap" class="checkbox-row">
+        <input type="checkbox" id="routeToggle" checked>
+        🧭 Afficher l'itinéraire et les trajets
+      </label>
+
       <div id="toolsBar">
-        <button id="routeToggle" class="btn">📍 Relier les étapes</button>
         <button id="seedBtn" class="btn">Charger des exemples</button>
         <button id="exportBtn" class="btn">⭳ Exporter</button>
         <label class="btn" for="importInput">⭱ Importer</label>
         <input type="file" id="importInput" accept="application/json" hidden>
       </div>
-      <p class="hint">Les données sont sauvegardées uniquement dans ce navigateur (localStorage). Pensez à exporter régulièrement pour ne rien perdre ou pour les transférer sur un autre appareil.</p>
+      <p class="hint">Les données sont sauvegardées uniquement dans ce navigateur (localStorage). Pensez à exporter régulièrement pour ne rien perdre ou pour les transférer sur un autre appareil. Les distances/durées de trajet sont calculées via le service public OSRM (estimation routière) ; à défaut de réponse, une estimation à vol d'oiseau est utilisée.</p>
     </aside>
 
     <div id="map"></div>

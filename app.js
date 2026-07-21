@@ -1,6 +1,7 @@
 "use strict";
 
 const STORAGE_KEY = "finistere-roadtrip-stops";
+const AVG_SPEED_KMH = 50; // hypothèse pour l'estimation à vol d'oiseau si le calcul d'itinéraire échoue
 
 const TYPES = {
   activite: [
@@ -67,7 +68,7 @@ const SEED_STOPS = [
   },
 ];
 
-/** @typedef {{id:string, name:string, category:'activite'|'dodo', type:string, lat:number, lng:number, date:string, rating:number, notes:string, createdAt:number}} Stop */
+/** @typedef {{id:string, name:string, category:'activite'|'dodo', type:string, lat:number, lng:number, date:string, rating:number, notes:string, order:number, createdAt:number}} Stop */
 
 /** @type {Stop[]} */
 let stops = loadStops();
@@ -75,16 +76,30 @@ let currentFilter = "all";
 let addMode = false;
 let editingId = null;
 let pendingLatLng = null;
-let showRoute = false;
 
 let tempMarker = null;
-let routeLine = null;
+let routeLines = [];
 const markersById = new Map();
+const legCache = new Map();
+
+function assignMissingOrders(list) {
+  const needsMigration = list.some((s) => typeof s.order !== "number");
+  if (needsMigration) {
+    list
+      .slice()
+      .sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.createdAt || 0) - (b.createdAt || 0))
+      .forEach((s, i) => {
+        s.order = i + 1;
+      });
+  }
+  return list;
+}
 
 function loadStops() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const parsed = raw ? JSON.parse(raw) : [];
+    return assignMissingOrders(parsed);
   } catch (e) {
     console.error("Impossible de lire les données sauvegardées", e);
     return [];
@@ -99,6 +114,108 @@ function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
+function nextOrder() {
+  return (stops.length ? Math.max(...stops.map((s) => s.order)) : 0) + 1;
+}
+
+function sortedStops() {
+  return [...stops].sort((a, b) => a.order - b.order);
+}
+
+function renumber() {
+  sortedStops().forEach((s, i) => {
+    s.order = i + 1;
+  });
+}
+
+function moveStop(id, dir) {
+  const sorted = sortedStops();
+  const idx = sorted.findIndex((s) => s.id === id);
+  const swapIdx = idx + dir;
+  if (idx === -1 || swapIdx < 0 || swapIdx >= sorted.length) return;
+  const tmp = sorted[idx].order;
+  sorted[idx].order = sorted[swapIdx].order;
+  sorted[swapIdx].order = tmp;
+  refreshAll();
+}
+
+function getVisibleStops() {
+  const sorted = sortedStops();
+  if (currentFilter === "all") return sorted;
+  return sorted.filter((s) => s.category === currentFilter);
+}
+
+// ---------- Trajets (distance / durée) ----------
+
+function haversineKm(a, b) {
+  const R = 6371;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const lat1 = (a.lat * Math.PI) / 180;
+  const lat2 = (b.lat * Math.PI) / 180;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function formatKm(km) {
+  return km < 10 ? km.toFixed(1).replace(".", ",") : Math.round(km).toString();
+}
+
+function formatDuration(min) {
+  const total = Math.round(min);
+  if (total < 60) return `${total} min`;
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
+
+function legKey(a, b) {
+  return `${a.id}__${b.id}__${a.lat.toFixed(5)}_${a.lng.toFixed(5)}__${b.lat.toFixed(5)}_${b.lng.toFixed(5)}`;
+}
+
+async function fetchRoute(a, b) {
+  try {
+    const url = `https://router.project-osrm.org/route/v1/driving/${a.lng},${a.lat};${b.lng},${b.lat}?overview=full&geometries=geojson`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("OSRM HTTP " + res.status);
+    const json = await res.json();
+    const route = json.routes && json.routes[0];
+    if (!route) throw new Error("Pas d'itinéraire trouvé");
+    return {
+      distanceKm: route.distance / 1000,
+      durationMin: route.duration / 60,
+      coords: route.geometry.coordinates.map(([lng, lat]) => [lat, lng]),
+      source: "osrm",
+    };
+  } catch (e) {
+    const distanceKm = haversineKm(a, b);
+    return {
+      distanceKm,
+      durationMin: (distanceKm / AVG_SPEED_KMH) * 60,
+      coords: [
+        [a.lat, a.lng],
+        [b.lat, b.lng],
+      ],
+      source: "estimate",
+    };
+  }
+}
+
+function ensureLeg(a, b) {
+  const key = legKey(a, b);
+  const existing = legCache.get(key);
+  if (existing) return existing;
+
+  const entry = { status: "loading" };
+  legCache.set(key, entry);
+  fetchRoute(a, b).then((result) => {
+    legCache.set(key, { status: "ready", ...result });
+    rebuildRoute();
+    renderList();
+  });
+  return entry;
+}
+
 // ---------- Map ----------
 
 const map = L.map("map").setView([48.15, -4.3], 10);
@@ -108,11 +225,14 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
 }).addTo(map);
 
-function makeIcon(category, type) {
+function makeIcon(category, type, order) {
   const emoji = TYPE_EMOJI[type] || (category === "dodo" ? "🚐" : "📍");
   return L.divIcon({
     className: "",
-    html: `<div class="marker-pin ${category}"><span>${emoji}</span></div>`,
+    html: `<div class="marker-wrap">
+      <div class="marker-pin ${category}"><span>${emoji}</span></div>
+      <div class="marker-order">${order}</div>
+    </div>`,
     iconSize: [32, 32],
     iconAnchor: [16, 32],
     popupAnchor: [0, -30],
@@ -127,7 +247,7 @@ function popupHtml(stop) {
   const typeLabel = (TYPES[stop.category].find((t) => t.value === stop.type) || {}).label || stop.type;
   return `
     <div class="popup-content">
-      <h3>${escapeHtml(stop.name)}</h3>
+      <h3>#${stop.order} · ${escapeHtml(stop.name)}</h3>
       <div>${typeLabel}</div>
       ${stop.date ? `<div>📅 ${stop.date}</div>` : ""}
       ${stop.rating ? `<div class="stars">${stars(stop.rating)}</div>` : ""}
@@ -150,7 +270,7 @@ function rebuildMarkers() {
   markersById.clear();
 
   getVisibleStops().forEach((stop) => {
-    const marker = L.marker([stop.lat, stop.lng], { icon: makeIcon(stop.category, stop.type) }).addTo(map);
+    const marker = L.marker([stop.lat, stop.lng], { icon: makeIcon(stop.category, stop.type, stop.order) }).addTo(map);
     marker.bindPopup(popupHtml(stop));
     marker.on("popupopen", (e) => {
       const el = e.popup.getElement();
@@ -164,24 +284,31 @@ function rebuildMarkers() {
 }
 
 function rebuildRoute() {
-  if (routeLine) {
-    map.removeLayer(routeLine);
-    routeLine = null;
-  }
+  routeLines.forEach((l) => map.removeLayer(l));
+  routeLines = [];
   if (!showRoute) return;
-  const ordered = getVisibleStops()
-    .filter((s) => s.date)
-    .sort((a, b) => a.date.localeCompare(b.date) || a.createdAt - b.createdAt);
-  if (ordered.length < 2) return;
-  routeLine = L.polyline(
-    ordered.map((s) => [s.lat, s.lng]),
-    { color: "#26241f", weight: 2, dashArray: "6 6" }
-  ).addTo(map);
-}
 
-function getVisibleStops() {
-  if (currentFilter === "all") return stops;
-  return stops.filter((s) => s.category === currentFilter);
+  const visible = getVisibleStops();
+  for (let i = 0; i < visible.length - 1; i++) {
+    const a = visible[i];
+    const b = visible[i + 1];
+    const leg = ensureLeg(a, b);
+    const latlngs =
+      leg.status === "ready"
+        ? leg.coords
+        : [
+            [a.lat, a.lng],
+            [b.lat, b.lng],
+          ];
+    const isEstimate = leg.status !== "ready" || leg.source === "estimate";
+    const line = L.polyline(latlngs, {
+      color: "#26241f",
+      weight: 3,
+      opacity: 0.75,
+      dashArray: isEstimate ? "6 6" : null,
+    }).addTo(map);
+    routeLines.push(line);
+  }
 }
 
 map.on("click", (e) => {
@@ -193,29 +320,61 @@ map.on("click", (e) => {
 
 // ---------- Sidebar list ----------
 
+function stopCardHtml(s) {
+  const typeLabel = (TYPES[s.category].find((t) => t.value === s.type) || {}).label || s.type;
+  return `
+      <div class="stop-card" data-id="${s.id}">
+        <div class="row1">
+          <span class="order-badge">${s.order}</span>
+          <span class="badge ${s.category}">${s.category === "activite" ? "Activité" : "Dodo"}</span>
+          <span class="stop-name">${escapeHtml(s.name)}</span>
+          <span class="reorder-btns">
+            <button type="button" class="reorder-btn" data-move="-1" data-id="${s.id}" title="Monter dans l'ordre">▲</button>
+            <button type="button" class="reorder-btn" data-move="1" data-id="${s.id}" title="Descendre dans l'ordre">▼</button>
+          </span>
+        </div>
+        <div class="meta">${typeLabel}${s.date ? " · " + s.date : ""}</div>
+        ${s.rating ? `<div class="stars">${stars(s.rating)}</div>` : ""}
+        ${s.notes ? `<div class="notes">${escapeHtml(s.notes)}</div>` : ""}
+      </div>`;
+}
+
+function legRowHtml(a, b) {
+  const leg = ensureLeg(a, b);
+  let content;
+  if (leg.status !== "ready") {
+    content = `<span class="leg-loading">Calcul du trajet…</span>`;
+  } else {
+    const estimateNote = leg.source === "estimate" ? ` <span class="leg-estimate">(estimation à vol d'oiseau)</span>` : "";
+    content = `🚗 ${formatKm(leg.distanceKm)} km · ${formatDuration(leg.durationMin)}${estimateNote}`;
+  }
+  return `<div class="leg-row">${content}</div>`;
+}
+
 function renderList() {
   const container = document.getElementById("stopList");
-  const visible = getVisibleStops().slice().sort((a, b) => b.createdAt - a.createdAt);
+  const visible = getVisibleStops();
 
   if (visible.length === 0) {
     container.innerHTML = `<p class="empty-msg">Aucun point pour l'instant.<br>Cliquez sur "+ Ajouter un point" puis sur la carte pour commencer.</p>`;
     return;
   }
 
-  container.innerHTML = visible
-    .map((s) => {
-      const typeLabel = (TYPES[s.category].find((t) => t.value === s.type) || {}).label || s.type;
-      return `
-      <div class="stop-card" data-id="${s.id}">
-        <div class="row1">
-          <span><span class="badge ${s.category}">${s.category === "activite" ? "Activité" : "Dodo"}</span>${escapeHtml(s.name)}</span>
-        </div>
-        <div class="meta">${typeLabel}${s.date ? " · " + s.date : ""}</div>
-        ${s.rating ? `<div class="stars">${stars(s.rating)}</div>` : ""}
-        ${s.notes ? `<div class="notes">${escapeHtml(s.notes)}</div>` : ""}
-      </div>`;
-    })
-    .join("");
+  let html = "";
+  visible.forEach((s, i) => {
+    html += stopCardHtml(s);
+    if (showRoute && i < visible.length - 1) {
+      html += legRowHtml(s, visible[i + 1]);
+    }
+  });
+  container.innerHTML = html;
+
+  container.querySelectorAll(".reorder-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      moveStop(btn.dataset.id, Number(btn.dataset.move));
+    });
+  });
 
   container.querySelectorAll(".stop-card").forEach((card) => {
     card.addEventListener("click", () => {
@@ -280,7 +439,9 @@ function openForm(id, latlng) {
   editingId = id;
   const editing = id ? stops.find((s) => s.id === id) : null;
 
-  document.getElementById("formTitle").textContent = editing ? "Modifier le point" : "Nouveau point";
+  document.getElementById("formTitle").textContent = editing
+    ? `Modifier l'étape #${editing.order}`
+    : `Nouvelle étape (#${nextOrder()})`;
   deleteStopBtn.classList.toggle("hidden", !editing);
 
   fName.value = editing ? editing.name : "";
@@ -301,7 +462,9 @@ function openForm(id, latlng) {
     tempMarker = null;
   }
   if (!editing) {
-    tempMarker = L.marker([coords.lat, coords.lng], { icon: makeIcon(fCategory.value, fType.value) }).addTo(map);
+    tempMarker = L.marker([coords.lat, coords.lng], {
+      icon: makeIcon(fCategory.value, fType.value, nextOrder()),
+    }).addTo(map);
   }
 
   formOverlay.classList.remove("hidden");
@@ -338,7 +501,7 @@ stopForm.addEventListener("submit", (e) => {
     const stop = stops.find((s) => s.id === editingId);
     Object.assign(stop, data);
   } else {
-    stops.push({ id: uid(), createdAt: Date.now(), ...data });
+    stops.push({ id: uid(), createdAt: Date.now(), order: nextOrder(), ...data });
   }
 
   closeForm();
@@ -354,6 +517,7 @@ deleteStopBtn.addEventListener("click", () => {
 function deleteStop(id) {
   if (!confirm("Supprimer ce point ?")) return;
   stops = stops.filter((s) => s.id !== id);
+  renumber();
   refreshAll();
 }
 
@@ -382,20 +546,22 @@ document.querySelectorAll(".filter-btn").forEach((btn) => {
   });
 });
 
-// ---------- Route toggle ----------
+// ---------- Itinéraire (afficher/masquer) ----------
 
 const routeToggle = document.getElementById("routeToggle");
-routeToggle.addEventListener("click", () => {
-  showRoute = !showRoute;
-  routeToggle.classList.toggle("active", showRoute);
+let showRoute = routeToggle.checked;
+
+routeToggle.addEventListener("change", () => {
+  showRoute = routeToggle.checked;
   rebuildRoute();
+  renderList();
 });
 
 // ---------- Seed examples ----------
 
 document.getElementById("seedBtn").addEventListener("click", () => {
   if (!confirm("Ajouter quelques points d'exemple dans le Finistère ?")) return;
-  SEED_STOPS.forEach((s) => stops.push({ id: uid(), createdAt: Date.now(), ...s }));
+  SEED_STOPS.forEach((s) => stops.push({ id: uid(), createdAt: Date.now(), order: nextOrder(), ...s }));
   refreshAll();
 });
 
@@ -420,7 +586,8 @@ document.getElementById("importInput").addEventListener("change", (e) => {
       const imported = JSON.parse(reader.result);
       if (!Array.isArray(imported)) throw new Error("Format invalide");
       if (confirm(`Importer ${imported.length} point(s) ? Cela remplacera les données actuelles.`)) {
-        stops = imported;
+        stops = assignMissingOrders(imported);
+        legCache.clear();
         refreshAll();
       }
     } catch (err) {
